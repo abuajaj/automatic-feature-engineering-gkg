@@ -1,136 +1,107 @@
-"""Python client calling Knowledge Graph Search API."""
-import json
-import re
-import urllib
-import urllib.request
-from urllib.parse import urlencode
+from __future__ import print_function
 
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+from sklearn import preprocessing
+from sklearn.preprocessing import MinMaxScaler
 
-from Parser import Parser
+import Utils
+from config_dev import TOP_N_FEATURES
+from Extractor import Extractor
+from models.Evaluation import Evaluation
 
+plt.style.use('seaborn-whitegrid')
 
-class Main:
-    """
-    """
+data_folder = Path("/Users/mabuajaj/PycharmProjects/AFEGKG/datasets/")
+lookup = 'lookup'
+target = 'target'
 
-    def __init__(self):
-        """Initializing
-        """
-        self.data = None
-        self.api_key = open('.api_key').read()
-        self.api_url = 'https://kgsearch.googleapis.com/v1/entities:search'
-        self.api_params = {
-            'query':  '',
-            'limit':  10,
-            'indent': True,
-            'key':    self.api_key,
-            # 'types': ['Person'],
-        }
-        self.parser = Parser()
-
-    def build_query(self, query):
-        """ Build HTTP query and send to GKG API,
-            As response; return graph as json-LD object
-            :param: query
-        """
-        if query == '':
-            return
-
-        self.api_params['query'] = query
-        url = self.api_url + '?' + urllib.parse.urlencode(self.api_params)
-        # print(url)
-        # Todo Handling errors
-        response = json.loads(urllib.request.urlopen(url).read())
-        return response
-
-    def load_data(self, filename):
-        """ Load dataset from file
-            :param filename (string)
-            :return DataFrame of data
-        """
-        try:
-            self.data = pd.read_csv(filename)
-        except FileNotFoundError:
-            msg = filename + ": FileNotFoundError"
-            e = Exception(msg)
-            print(e)
-
-    def extract_features(self, entity_column):
-        """ Extract candidate features from built dataset using GKG API
-            :param entity_column:
-            :return result of candidate features
-        """
-        if entity_column == '' or entity_column is None:
-            return {}
-
-        entity_features = {}
-        for i, search in enumerate(self.data[entity_column]):
-            if search:
-                # print("before: ", search)
-                search = self.normalize_text(search)
-                # print("after: ", search)
-                graph_response = self.build_query(search)
-                if graph_response:
-                    features = self.parser.parse(graph_response)
-                    entity_features[search] = features
-                    self.add_to_dataset(features, i)
-
-        return entity_features
-
-    def normalize_text(self, text):
-        """Returns a normalized string based on the specific string.
-            You can add default parameters as you like (they should have default values!)
-
-            :param text (str) the text to normalize
-
-            :returns: string. the normalized text.
-
-            lower casing, padding punctuation with white spaces
-        """
-        text = re.sub("_", " ", text)
-        text = re.sub("[!@#$+%*:()',;}{{})(\\]\\[-]", "", text)
-        text = text.lower().strip()
-
-        return text
-
-    def add_to_dataset(self, columns, index):
-        for column, value in columns.items():
-            if column not in self.data.keys():
-                self.data[column] = pd.Series([])
-            self.data.loc[index, column] = value
+scaler = MinMaxScaler(feature_range=(0, 1))
+le = preprocessing.LabelEncoder()
+evaluate = Evaluation()
 
 
-main = Main()
-graph_response = main.build_query('The Color Purple')
-features_list = main.parser.parse(graph_response)
-print(features_list)
+def prepare_before(X, y):
+    for x in X:
+        feature_type = Utils.find_feature_type(X[x])
+        if feature_type is str or feature_type is object:
+            X[x] = le.fit_transform(Utils.missing_data(X[x].dtype, list(X[x])))
+        else:
+            X[x] = scaler.fit_transform(np.array(X[x]).reshape(-1, 1))
 
-# parser = Parser()
-# parser.parse(graph_response)
+    evaluate.features_importance(X, y)
+    scores = evaluate.model_1(X, y)
+    print('Before >>> Scores (mean):')
+    print(scores)
+    return X, y
 
-# main.load_data("datasets/dataset_189_baseball.csv")
-# extracted_features = main.extract_features('Player')
-# print(extracted_features)
-# s = Selection()
 
-# load the dataset
-# X, y = s.prepare_dataset(main.data)
-# # split into train and test sets
-# X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=1)
-# # prepare input data
-# X_train_enc, X_test_enc = s.prepare_inputs(X_train, X_test)
-# # prepare output data
-# y_train_enc, y_test_enc = s.prepare_targets(y_train, y_test)
-# # feature selection
-# X_train_fs, X_test_fs, fs = s.select_features(X_train_enc, y_train_enc, X_test_enc)
-# # what are scores for the features
-# for i in range(len(fs.scores_)):
-#     print('Feature %d: %f' % (i, fs.scores_[i]))
-#
-# # plot the scores
-# pyplot.bar([i for i in range(len(fs.scores_))], fs.scores_)
-# pyplot.show()
+def prepare_after(X, y, table_name):
+    print('Extractor >>> Start.. ', Utils.print_time())
 
-# for element in graph_response['itemListElement']:
-#     print(element['result']['name'] + ' (' + str(element['resultScore']) + ')')
+    extractor = Extractor(table_name, lookup)
+    extractor.df = X[lookup]
+    extractor.build()
+
+    extractor.extract()
+    extractor.clean_and_normalize()
+
+    X.drop([lookup], axis=1, inplace=True)
+    if not X.empty:
+        _X = pd.concat([X, extractor.extracted_df], axis=1, sort=False)
+    else:
+        _X = extractor.extracted_df
+
+    for x in _X:
+        feature_type = Utils.find_feature_type(_X[x])
+        if feature_type is str or feature_type is object:
+            _X[x] = le.fit_transform(Utils.missing_data(_X[x].dtype, list(_X[x])))
+        else:
+            _X[x] = scaler.fit_transform(np.array(_X[x]).reshape(-1, 1))
+
+    features_meta_after = evaluate.features_importance(_X, y)
+
+    extracted_features = features_meta_after['feature_imp'][extractor.extracted_df.keys()]
+    extracted_features = Utils.sort_keys(extracted_features)
+    not_extracted_features = list(extracted_features)[TOP_N_FEATURES:]
+    extracted_features = list(extracted_features)[:TOP_N_FEATURES]
+    _X.drop(not_extracted_features, 1, inplace=True)
+
+    features_meta_after_clean = evaluate.features_importance(_X, y)
+
+    scores = evaluate.model_1(_X, y)
+    print('After >>> Scores (mean) with new features:')
+    print(scores)
+
+    print('Extractor >>> The End is near!')
+    extractor.db_manager.db_close()
+
+
+def main():
+    print('>>> Start.. ', Utils.print_time())
+
+    # dataset_file = data_folder / "movies_after_matching.csv"
+    dataset_file = data_folder / 'dataset_189_baseball_after_matching.csv'
+    table_name = 'baseballTBR'
+
+    dataset = pd.read_csv(dataset_file, decimal=',')
+    # dataset = dataset.head(100)
+    y = dataset[target]
+
+    # BEFORE
+    X = dataset.drop([target, lookup], axis=1)
+    if not X.empty:
+        X, y = prepare_before(X, y)
+
+    # AFTER
+    X = dataset.drop([target], axis=1)
+    prepare_after(X, y, table_name)
+
+    print('<<< Stop.. ', Utils.print_time())
+
+
+if __name__ == "__main__":
+    main()

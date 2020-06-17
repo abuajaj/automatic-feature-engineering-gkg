@@ -1,49 +1,118 @@
+"""Python """
+import gzip
+import json
+import re
+
+from mysql.connector import Error
+
+import Utils
+from config_dev import ALLOWED_ENTITIES, SOURCE_PATH
+from DBManager import DBManager
 
 
 class Parser:
     """
     """
 
-    def __init__(self) -> object:
-        """Initializing
+    def __init__(self):
         """
-        self.features = {}
-        self.structured_params = ["description", "url"]
-        self.unstructured_params = ["image", "detailedDescription"]
+        Initializing
+        """
+        self.allowed_entities = ALLOWED_ENTITIES
+        self.db_manager = DBManager()
 
-    def parse(self, graph_object):
+    def read_data(self, file):
         """
-        :param graph_object
-        :returns features
+        :param file:
+        :return:
         """
-        features = {}
-        for element in graph_object['itemListElement']:
-            # print(element['result']['name'] + ' (' + str(element['resultScore']) + ')')
-            for key, value in element['result'].items():
-                if key in self.structured_params:
-                    features[key] = value
-                elif key in self.unstructured_params:
-                    if "detailedDescription" == key:
-                        features[key] = value['articleBody']
-                # else:
-                #     print("New key: ", key, " Value: ", value)
-            # get the first element (with highest score)
-            # Todo optimize this step of stopping
-            break
+        try:
+            iTotal = 0
+            current_mid = ""
+            current_topic = dict()
+            with gzip.open(file, 'rt') as f:
+                for line in f:
+                    subject, predicate, object = Utils.parse_triple(line)
+                    if subject == current_mid:
+                        if predicate not in current_topic:
+                            current_topic[predicate] = [object]
+                        else:
+                            current_topic[predicate].append(object)
+                    elif current_mid:
+                        self.prepare_to_save(subject, current_topic)
 
-        return features
+                        current_topic.clear()
 
-    def structured(self, key, value):
-        """ Handling structured params
-        :param key
-        :param value
-        """
-        self.features[key] = value
+                    current_mid = subject
 
-    def unstructured(self, key, value):
-        """ Handling unstructured params
-        :param key
-        :param value
+                    iTotal = iTotal + 1
+                    if 0 == (iTotal % 1000000):
+                        print("iTotal: ", iTotal)
+                        print()
+
+        except Error as e:
+            print("Error while reading file", e)
+
+    def prepare_to_save(self, subject, current_topic):
         """
-        if "detailedDescription" == key:
-            self.features[key] = value['articleBody']
+        :param subject:
+        :param current_topic:
+        :return:
+        """
+        if '/type/object/type' in current_topic:
+            for iType in current_topic['/type/object/type']:
+                for allowed_type_key, allowed_type_table in self.allowed_entities.items():
+                    if re.search(allowed_type_key, iType):
+                        # Save to DB
+                        if self.prepare_database():
+                            self.save_to_database(allowed_type_table, subject, current_topic)
+                            break
+
+    def prepare_database(self):
+        """
+        :return:
+        """
+        if self.db_manager and self.db_manager is not None and self.db_manager.is_connected():
+            return True
+        elif self.db_manager is not None and not self.db_manager.is_connected():
+            self.db_manager.db_connect()
+            return self.db_manager.is_connected()
+        return False
+
+    def save_to_database(self, table, subject, current_topic):
+        """
+        :param table:
+        :param subject:
+        :param current_topic:
+        :return:
+        """
+        current_topic = Utils.handle_duplicate(current_topic)
+        current_topic = Utils.handle_language(current_topic)
+
+        if current_topic is None or len(current_topic) == 0:
+            return
+
+        name = ''
+        if '/type/object/name' in current_topic.keys():
+            if isinstance(current_topic['/type/object/name'], list):
+                name = current_topic['/type/object/name'][0]
+            else:
+                name = current_topic['/type/object/name']
+            current_topic.pop('/type/object/name')
+        elif 'label' in current_topic.keys():
+            if isinstance(current_topic['label'], list):
+                name = current_topic['label'][0]
+            else:
+                name = current_topic['label']
+            current_topic.pop('label')
+
+        if name and current_topic is not None and len(current_topic) > 0:
+            name = Utils.clean_lang(name)
+            self.db_manager.db_insert(table, name, subject, json.dumps(current_topic))
+
+
+if __name__ == '__main__':
+    parser = Parser()
+    parser.read_data(SOURCE_PATH)
+    parser.db_manager.db_close()
+    print('parser: The End is near!')
