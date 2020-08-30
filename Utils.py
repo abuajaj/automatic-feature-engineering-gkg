@@ -1,11 +1,15 @@
 import json
 import operator
 import re
+from _csv import Error
 from datetime import datetime
 
 import numpy as np
+import pandas as pd
+from sklearn import preprocessing
+from sklearn.model_selection import train_test_split
 
-from config_dev import NOT_ALLOWED_TYPES
+from config_dev import NOT_ALLOWED_TYPES, TARGET, TOP_N_FEATURES
 
 
 def normalize_uri(uri):
@@ -46,6 +50,7 @@ def normalize_name(name):
 
 def parse_triple(line):
     """
+    Parse given FB line into three parts
     :param line:
     :return:
     """
@@ -78,6 +83,7 @@ def handle_duplicate(current_topic):
 
 def handle_language(current_topic):
     """
+    Handling lang features
     :param current_topic:
     :return:
     """
@@ -100,13 +106,19 @@ def handle_language(current_topic):
 
 
 def clean_lang(s):
+    """
+    Clean string from language declaration
+    :param s:
+    :return:
+    """
     return s.replace("@en", "").replace("\"", "").replace("\\", "")
 
 
 def is_english(s):
     """
+    Check if given string is english string
     :param s:
-    :return:
+    :return: boolean
     """
     try:
         s.encode(encoding='utf-8').decode('ascii')
@@ -118,8 +130,9 @@ def is_english(s):
 
 def is_english2(s):
     """
+    Check if given string is english string
     :param s:
-    :return:
+    :return: boolean
     """
     if (re.search("\"@", s) or re.search("@", s)) and not re.search("\"@en", s):
         return False
@@ -128,12 +141,21 @@ def is_english2(s):
 
 
 def print_time():
+    """
+    Print curent time
+    :return:
+    """
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
-    return "Current Time =", current_time
+    return "Current Time = ", current_time
 
 
 def print_json(data):
+    """
+    Print given object as JSON format
+    :param data:
+    :return:
+    """
     json_formatted_str = json.dumps(data, indent=2)
     print(json_formatted_str)
     print()
@@ -141,14 +163,17 @@ def print_json(data):
 
 def missing_data(feature_type, values):
     """
-    :return:
+    Fill missing data according to data type
+    :param feature_type:
+    :param values:
+    :return: data without missing data
     """
 
     if feature_type == int or feature_type == float:
         if feature_type == int:
-            values = [int(x) for x in values]
+            values = [0 if x == '' else int(x) for x in values]
         if feature_type == float:
-            values = [float(x) for x in values]
+            values = [.0 if x == '' else float(x) for x in values]
 
         for i in range(0, len(values)):
             if values[i] is np.nan:
@@ -169,25 +194,121 @@ def missing_data(feature_type, values):
 
 
 def find_feature_type(column):
+    """
+    Find given data column' type
+    :param column:
+    :return: data type
+    """
     column_types = dict()
     for value in column:
-        value_type = type(value)
-        if value_type is str:
-            try:
-                print(value)
-                tmp = float(value)
-                if isinstance(tmp, (int, float, complex)) and not isinstance(tmp, bool):
-                    value_type = float
-            except ValueError:
-                pass
-        if value_type in column_types:
-            column_types[value_type] = column_types[value_type] + 1
-        else:
-            column_types[value_type] = 1
+        if value:
+            value_type = type(value)
+            if value_type is str:
+                try:
+                    tmp = float(value)
+                    if isinstance(tmp, int) and not isinstance(tmp, bool):
+                        value_type = int
+                    elif isinstance(tmp, (float, complex)) and not isinstance(tmp, bool):
+                        value_type = float
+                except ValueError:
+                    return str
+            if value_type in column_types:
+                column_types[value_type] = column_types[value_type] + 1
+            else:
+                column_types[value_type] = 1
     return max(column_types.items(), key=operator.itemgetter(1))[0]
 
 
 def sort_keys(items):
+    """
+    Sort given keys
+    :param items:
+    :return: sorted items
+    """
     return {k: v for k, v in reversed(sorted(items.items(), key=lambda item: item[1]))}
+
+
+def init_values(feature_type, length):
+    """
+    Init values by given data type
+    :param feature_type:
+    :param length:
+    :return:
+    """
+    values = []
+    for i in range(0, length):
+        if feature_type == str:
+            values.append("")
+        elif feature_type == object:
+            values.append("")
+        elif feature_type == list:
+            values.append(0)
+        else:
+            values.append(np.nan)
+    return values
+
+
+def split_dataset(dataset, lookup, target, test_size=.2):
+    """
+    Split dataset by 'test_size'
+    :param test_size: Train & Test percents
+    :param dataset:
+    :param lookup:
+    :param target:
+    :param test_size:
+    :return: X_train, X_test, y_train, y_test
+    """
+    X = dataset.drop([target, lookup], axis=1)
+    y = dataset[target]
+
+    return train_test_split(X, y, test_size=test_size, random_state=0)
+
+
+def normalize(feature_data):
+    """
+    :param feature_data:
+    :return:
+    """
+    oe = preprocessing.LabelEncoder()
+
+    feature_type = find_feature_type(feature_data)
+    values = init_values(feature_type, len(feature_data))
+
+    for i, value in enumerate(feature_data):
+        if feature_type == list:
+            values[i] = 0 if value is None else len(value)
+        else:
+            if type(value) == list:
+                value = value[0]
+            values[i] = "" if value is None else value
+
+    feature_type = find_feature_type(values)
+    values = missing_data(feature_type, values)
+    values = oe.fit_transform(values)
+    return values
+
+
+def write_dataset(dataset, file_name):
+    """
+    :return:
+    """
+    try:
+        if isinstance(dataset, pd.DataFrame):
+            dataset.to_csv(file_name, sep=',', encoding='utf-8', index=False)
+    except Error as e:
+        print("Error while writing file", e)
+
+
+def get_n_features(features):
+    """
+    Return top n features (in DESC) by TARGET column
+    :return:
+    """
+    sorted_features = pd.Series(features[TARGET].sort_values(ascending=[False]))
+    top_n = pd.Series(sorted_features.head(TOP_N_FEATURES))
+    result = pd.DataFrame(columns=['lookup', 'target'], data=features.loc[top_n.keys().values])
+    print(result)
+    return result
+
 
 # End of Utils

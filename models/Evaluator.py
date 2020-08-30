@@ -3,82 +3,116 @@ from itertools import cycle
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from keras import Sequential
 from keras.layers import Dense
 from scipy import interp
 from sklearn import linear_model
 from sklearn import svm
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_selection import chi2, f_classif, mutual_info_classif
 from sklearn.metrics import auc, roc_curve
 from sklearn.metrics import confusion_matrix
+from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.multiclass import OneVsRestClassifier
-from sklearn.preprocessing import label_binarize
+from sklearn.preprocessing import label_binarize, LabelEncoder
+
+import Utils
+from config_dev import LOOKUP, TARGET
 
 plt.style.use('seaborn-whitegrid')
 
 
-class Evaluation:
+class Evaluator:
     """
     """
 
     def __init__(self) -> object:
         """Initializing
         """
-        self.model = None
+        self.scoring_model = svm.SVC(kernel='linear', probability=True)
+        self.model = linear_model.LinearRegression()
 
     def get_model(self):
         """
         """
         return self.model
 
-    def features_importance(self, X, y):
-        result = dict()
-        # Split dataset into training set and test set
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)  # 80% training and 20% test
-        # Create a Gaussian Classifier
-        clf = RandomForestClassifier(bootstrap=True, class_weight=None, criterion='gini',
-                                     max_depth=None, max_features='auto', max_leaf_nodes=None,
-                                     min_impurity_decrease=0.0, min_impurity_split=None,
-                                     min_samples_leaf=1, min_samples_split=2,
-                                     min_weight_fraction_leaf=0.0, n_estimators=100, n_jobs=1,
-                                     oob_score=False, random_state=None, verbose=0,
-                                     warm_start=False)
-        # Train the model using the training sets y_pred=clf.predict(X_test)
-        clf.fit(X_train, y_train)
-
-        result['feature_imp'] = pd.Series(clf.feature_importances_, index=X.keys()).sort_values(ascending=False)
-        print('feature_imp', result['feature_imp'])
-
-        # Creating a bar plot
-        sns.barplot(x=result['feature_imp'], y=result['feature_imp'].index)
-        # Add labels to your graph
-        plt.xlabel('Feature Importance Score')
-        plt.ylabel('Features')
-        plt.title("Visualizing Important Features")
-        plt.legend()
-        plt.show()
-
-        result['chi2_score'], result['chi_2_p_value'] = chi2(X, y)
-        result['f_score'], result['f_p_value'] = f_classif(X, y)
-        result['mut_info_score'] = mutual_info_classif(X, y)
-
-        print('chi2 score        ', result['chi2_score'])
-        print('chi2 p-value      ', result['chi_2_p_value'])
-        print('F - score score   ', result['f_score'])
-        print('F - score p-value ', result['f_p_value'])
-        print('mutual info       ', result['mut_info_score'])
-
-        print('chi2 score mean        ', np.mean(result['chi2_score']))
-        print('F - score score mean   ', np.mean(result['f_score']))
-        print('mutual info mean      ', np.mean(result['mut_info_score']))
-
-        return result
-
-    def model_1(self, X, y):
+    def evaluate(self, extracted_features, meta_features, dataset, classes):
         """
+        :param extracted_features: extracted features dataset
+        :param meta_features: meta features dataset
+        :param dataset: original dataset
+        :param classes:
+        :return:
+        """
+
+        le = LabelEncoder()
+        y = le.fit_transform(dataset[TARGET])
+        classes = le.fit_transform(classes)
+        dataset.drop([LOOKUP, TARGET], axis=1, inplace=True)
+
+        # normalize
+        for feature, feature_data in dataset.items():
+            dataset[feature] = Utils.normalize(feature_data)
+
+        meta_features[TARGET] = pd.Series()
+        meta_features[TARGET].fillna(0, inplace=True)
+
+        if not len(dataset.keys()):
+            OLD_AUC = 0
+        else:
+            OLD_AUC = self.find_target(dataset, y, classes)
+
+        for index, row in meta_features.iterrows():
+            X = pd.concat([dataset, extracted_features[row[LOOKUP]]], axis=1, sort=False)
+            NEW_AUC = self.find_target(X, y, classes)
+            if OLD_AUC == 0:
+                meta_features.set_value(index, TARGET, NEW_AUC)
+            else:
+                meta_features.set_value(index, TARGET, NEW_AUC - OLD_AUC)
+
+        return meta_features
+
+    def find_target(self, X, y, classes):
+        """
+        :param X:
+        :param y:
+        :param classes:
+        :return:
+        """
+        # shuffle and split training and test sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=.2, random_state=0)
+
+        self.scoring_model.fit(X_train, y_train)
+
+        y_pred = self.scoring_model.predict(X_test)
+
+        try:
+            AUC = roc_auc_score(label_binarize(y_test, classes=classes), label_binarize(y_pred, classes=classes))
+            print(AUC)
+            return AUC
+        except ValueError:
+            return 0
+
+    def predict(self, X):
+        """
+        :param X:
+        :return:
+        """
+        if np.any(np.isinf(X)):
+            X.replace(np.inf, 0, inplace=True)
+        if np.any(np.isnan(X)):
+            X.replace(np.nan, 0, inplace=True)
+
+        y_pred = self.model.predict(X)
+
+        return y_pred
+
+    def model(self, X, y):
+        """
+
+        :param X:
+        :param y:
+        :return:
         """
         classifier = OneVsRestClassifier(svm.SVC(kernel='linear', probability=True))
 
@@ -205,6 +239,3 @@ class Evaluation:
 
         cm = confusion_matrix(y_test, y_pred)
         print(cm)
-
-    def evaluate(self):
-        pass

@@ -4,6 +4,7 @@ import mysql.connector
 from mysql.connector import Error
 
 from config_dev import database, host, password, port, username
+from db.tables import TABLES
 
 
 class DBManager:
@@ -74,6 +75,9 @@ class DBManager:
             cursor = self.db_connection.cursor()
             result = cursor.execute(query)
             print("Query executed successfully")
+            # Make sure data is committed to the database
+            self.db_connection.commit()
+            cursor.close()
             return result
 
     def db_create_database(self):
@@ -83,16 +87,22 @@ class DBManager:
         mySql_create_db_query = "CREATE DATABASE IF NOT EXISTS `freebase` CHARACTER SET utf8 COLLATE utf8_general_ci; "
         self.db_execute_query(mySql_create_db_query)
 
-    def db_create_table(self):
+    def db_init(self):
         """
+        Init Database with all tables
         :return:
         """
-        mySql_create_table_query = """CREATE TABLE data ( 
-                                                         subject varchar(250) NOT NULL,
-                                                         predicate varchar(250) NOT NULL,
-                                                         object varchar(250) NOT NULL,
-                                                         PRIMARY KEY (subject, predicate, object)) """
-        self.db_execute_query(mySql_create_table_query)
+        query = """CREATE TABLE IF NOT EXISTS db_   schema ( 
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        name TEXT NOT NULL, 
+                        subject TEXT NOT NULL, 
+                        data LONGTEXT NOT NULL
+                    ) """
+        self.db_execute_query(query)
+
+        for table in TABLES:
+            query = "CREATE TABLE IF NOT EXISTS " + table + " LIKE db_schema"
+            self.db_execute_query(query)
 
     def db_insert(self, table, name, subject, data):
         """
@@ -102,8 +112,8 @@ class DBManager:
         :param data:
         :return:
         """
-        if self.db_connection is not None and self.db_connection.is_connected() \
-                and self.db_fetch_by_subject(table, subject, False) is None:
+        if self.db_connection is not None and self.db_connection.is_connected():
+            # and self.db_fetch_by_subject(table, subject, False) is None:
             query = "INSERT INTO " + table + " (`name`, `subject`, `data`) VALUES (%s, %s, %s)"
             cursor = self.db_connection.cursor()
             cursor.execute(query, (name, subject, data))
@@ -111,39 +121,17 @@ class DBManager:
             self.db_connection.commit()
             cursor.close()
 
-    def check_table_exists(self, table_name):
-        cursor = self.db_connection.cursor()
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM information_schema.tables
-            WHERE table_name = '{0}'
-            """.format(table_name.replace('\'', '\'\'')))
-        if cursor.fetchone()[0] == 1:
-            cursor.close()
-            return True
-
-        cursor.close()
-        return False
-
     def db_fetch(self, table, name):
         """
         :param table:
         :param name:
         :return:
         """
-        if self.db_connection is not None and self.db_connection.is_connected() and self.check_table_exists(table):
+        if self.db_connection is not None and self.db_connection.is_connected():
             query = "SELECT * FROM " + table + " WHERE `name` LIKE %s"
             cursor = self.db_connection.cursor()
             cursor.execute(query, (name,))
             result = cursor.fetchall()
-
-            # Assign names to values
-            # mappedResult = []
-            # for row in result:
-            #     print(row)
-            #     fields = map(lambda x: x[0], cursor.description)
-            #     mappedResult.append(dict(zip(fields, row)))
-            #     print(mappedResult)
 
             fields = map(lambda x: x[0], cursor.description)
             result = [dict(zip(fields, row)) for row in result]

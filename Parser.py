@@ -7,19 +7,29 @@ from mysql.connector import Error
 
 import Utils
 from config_dev import ALLOWED_ENTITIES, SOURCE_PATH
-from DBManager import DBManager
+from db.DBManager import DBManager
 
 
 class Parser:
     """
+    Parser Freebase triples into DB tables according to entity type
     """
 
     def __init__(self):
         """
         Initializing
         """
-        self.allowed_entities = ALLOWED_ENTITIES
         self.db_manager = DBManager()
+
+    def init_database(self):
+        """
+        :return:
+        """
+        if self.db_manager is not None and not self.db_manager.is_connected():
+            self.db_manager.db_connect()
+            self.db_manager.db_init()
+            return self.db_manager.is_connected()
+        return False
 
     def read_data(self, file):
         """
@@ -61,7 +71,7 @@ class Parser:
         """
         if '/type/object/type' in current_topic:
             for iType in current_topic['/type/object/type']:
-                for allowed_type_key, allowed_type_table in self.allowed_entities.items():
+                for allowed_type_key, allowed_type_table in ALLOWED_ENTITIES.items():
                     if re.search(allowed_type_key, iType):
                         # Save to DB
                         if self.prepare_database():
@@ -112,7 +122,16 @@ class Parser:
 
 
 if __name__ == '__main__':
-    parser = Parser()
-    parser.read_data(SOURCE_PATH)
-    parser.db_manager.db_close()
+    print('>>> Start.. ', Utils.print_time())
+
+    # init
+    _parser = Parser()
+
+    # init & prepare DB: create new entities tables
+    _parser.init_database()
+
+    # reading & parsing into DB
+    _parser.read_data(SOURCE_PATH)
+    _parser.db_manager.db_close()
+
     print('parser: The End is near!')
